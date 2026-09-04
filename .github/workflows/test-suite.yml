@@ -2,15 +2,25 @@
 name: Test Suite
 
 on:
-  push:
-    branches: ["master"]
-  pull_request:
-    branches: ["master"]
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Optional pytest filter forwarded to scripts/test"
+        required: false
+        default: ""
 
 jobs:
   tests:
     name: "Python ${{ matrix.python-version }}"
     runs-on: "ubuntu-latest"
+    timeout-minutes: 30
+
+    env:
+      # Resolve dependencies as of the 0.47.2 release date. `scripts/build` runs a
+      # bare `python -m build`, and only PIP_INDEX_URL as an env var reaches that
+      # isolated build env, so this is what pins the backend to hatchling 1.27.0 —
+      # the `Generator:` recorded in the published wheel.
+      PIP_INDEX_URL: "https://:2025-07-20T17:31:56.738866Z@time-machines-pypi.sealsecurity.io/"
 
     strategy:
       matrix:
@@ -30,15 +40,27 @@ jobs:
       - name: "Build package & docs"
         run: "scripts/build"
       - name: "Run tests"
-        run: "scripts/test"
+        run: "scripts/test ${{ inputs.test-filter }}"
       - name: "Enforce coverage"
         run: "scripts/coverage"
+        # `--fail-under=100` only holds for a full run; a filtered dispatch would
+        # fail it for a reason unrelated to the selected tests.
+        if: ${{ inputs.test-filter == '' }}
+      - name: "Upload distributions"
+        # One leg only: upload-artifact@v4 rejects duplicate names across a matrix.
+        if: ${{ matrix.python-version == '3.11' }}
+        uses: "actions/upload-artifact@v4"
+        with:
+          name: "dist"
+          path: "dist/*"
+          if-no-files-found: error
 
   # https://github.com/marketplace/actions/alls-green#why
   check:
     if: always()
     needs: [tests]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Decide whether the needed jobs succeeded or failed
         uses: re-actors/alls-green@release/v1
