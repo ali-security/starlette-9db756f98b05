@@ -798,6 +798,47 @@ def test_file_response_insert_ranges(file_response_client: TestClient) -> None:
     ]
 
 
+def test_file_response_range_without_dash(file_response_client: TestClient) -> None:
+    response = file_response_client.get("/", headers={"Range": "bytes=100, 0-50"})
+    assert response.status_code == 206
+    assert response.headers["content-range"] == f"bytes 0-50/{len(README.encode('utf8'))}"
+
+
+def test_file_response_range_empty_start_and_end(file_response_client: TestClient) -> None:
+    response = file_response_client.get("/", headers={"Range": "bytes= - , 0-50"})
+    assert response.status_code == 206
+    assert response.headers["content-range"] == f"bytes 0-50/{len(README.encode('utf8'))}"
+
+
+def test_file_response_range_ignore_non_numeric(file_response_client: TestClient) -> None:
+    response = file_response_client.get("/", headers={"Range": "bytes=abc-def, 0-50"})
+    assert response.status_code == 206
+    assert response.headers["content-range"] == f"bytes 0-50/{len(README.encode('utf8'))}"
+
+
+def test_file_response_suffix_range(file_response_client: TestClient) -> None:
+    # Test suffix range (last N bytes) - with empty start_str
+    response = file_response_client.get("/", headers={"Range": "bytes=-100"})
+    assert response.status_code == 206
+    file_size = len(README.encode("utf8"))
+    assert response.headers["content-range"] == f"bytes {file_size - 100}-{file_size - 1}/{file_size}"
+    assert response.headers["content-length"] == "100"
+    assert response.content == README.encode("utf8")[-100:]
+
+
+def test_file_response_range_redos_payload(file_response_client: TestClient) -> None:
+    # A long run of digits terminated by a non-digit made the previous `(\d*)-(\d*)` pattern
+    # backtrack from every offset of the header, giving quadratic parse time. Parsing is now
+    # linear, so the malformed header is rejected immediately instead of burning CPU.
+    malicious_range = "bytes=" + "0" * 150_000 + "a-"
+    started = time.perf_counter()
+    response = file_response_client.get("/", headers={"Range": malicious_range})
+    elapsed = time.perf_counter() - started
+    assert response.status_code == 400
+    assert response.text == "Range header: range must be requested"
+    assert elapsed < 5
+
+
 @pytest.mark.anyio
 async def test_file_response_multi_small_chunk_size(readme_file: Path) -> None:
     class SmallChunkSizeFileResponse(FileResponse):
